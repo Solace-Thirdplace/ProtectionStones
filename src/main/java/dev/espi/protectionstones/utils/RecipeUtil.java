@@ -28,25 +28,30 @@ import org.bukkit.inventory.RecipeChoice;
 import org.bukkit.inventory.ShapedRecipe;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 
 public class RecipeUtil {
 
-    private static List<NamespacedKey> recipes = new ArrayList<>();
+    // replaced as a whole and never mutated after it is published: player join handlers on other region threads
+    // iterate it while /ps reload runs on the global region thread
+    private static volatile List<NamespacedKey> recipes = Collections.emptyList();
     public static void setupPSRecipes() {
+        List<NamespacedKey> newRecipes = new ArrayList<>(recipes);
         for (PSProtectBlock b : ProtectionStones.getInstance().getConfiguredBlocks()) {
             // add custom recipes to Bukkit
             if (b.allowCraftWithCustomRecipe) {
                 try {
                     Bukkit.addRecipe(parseRecipe(b));
-                    recipes.add(getNamespacedKeyForBlock(b));
+                    newRecipes.add(getNamespacedKeyForBlock(b));
                 } catch (IllegalStateException e) {
                     ProtectionStones.getPluginLogger().warning("Reloading custom recipes does not work right now, you have to restart the server for updated recipes.");
                 }
             }
         }
+        recipes = Collections.unmodifiableList(newRecipes);
     }
     public static void removePSRecipes() {
         // remove previous protectionstones recipes (/ps reload)
@@ -60,7 +65,7 @@ public class RecipeUtil {
             } catch (Exception ignored) {
             }
         }
-        recipes.clear();
+        recipes = Collections.emptyList();
     }
 
     public static List<NamespacedKey> getRecipeKeys() {

@@ -75,8 +75,10 @@ public class ProtectionStones extends JavaPlugin {
     private PSEconomy economy;
 
     // all configuration file options are stored in here
-    private PSConfig configOptions;
-    static HashMap<String, PSProtectBlock> protectionStonesOptions = new HashMap<>();
+    private volatile PSConfig configOptions;
+    // replaced as a whole on /ps reload and never mutated after it is published, so region threads that read it
+    // while a reload runs on the global region thread always see a complete map (old or new)
+    static volatile HashMap<String, PSProtectBlock> protectionStonesOptions = new HashMap<>();
 
 
     // ps alias to id cache
@@ -401,8 +403,12 @@ public class ProtectionStones extends JavaPlugin {
      */
 
     public static PSProtectBlock getProtectBlockFromAlias(String name) {
+        return getProtectBlockFromAlias(ProtectionStones.protectionStonesOptions, name);
+    }
+
+    static PSProtectBlock getProtectBlockFromAlias(Map<String, PSProtectBlock> options, String name) {
         if (name == null) return null;
-        for (PSProtectBlock cpb : ProtectionStones.protectionStonesOptions.values()) {
+        for (PSProtectBlock cpb : options.values()) {
             if (cpb.alias.equalsIgnoreCase(name) || cpb.type.equalsIgnoreCase(name)) return cpb;
         }
         return null;
