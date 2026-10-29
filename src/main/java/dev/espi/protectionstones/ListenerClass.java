@@ -26,6 +26,7 @@ import com.sk89q.worldguard.protection.regions.ProtectedRegion;
 import dev.espi.protectionstones.event.PSBreakProtectBlockEvent;
 import dev.espi.protectionstones.event.PSCreateEvent;
 import dev.espi.protectionstones.event.PSRemoveEvent;
+import dev.espi.protectionstones.utils.PSScheduler;
 import dev.espi.protectionstones.utils.RecipeUtil;
 import dev.espi.protectionstones.utils.UUIDCache;
 import dev.espi.protectionstones.utils.WGUtils;
@@ -68,7 +69,7 @@ public class ListenerClass implements Listener {
         UUIDCache.storeUUIDNamePair(p.getUniqueId(), p.getName());
 
         // allow worldguard to resolve all UUIDs to names
-        Bukkit.getScheduler().runTaskAsynchronously(ProtectionStones.getInstance(), () -> UUIDCache.storeWGProfile(p.getUniqueId(), p.getName()));
+        PSScheduler.runAsync(() -> UUIDCache.storeWGProfile(p.getUniqueId(), p.getName()));
 
         // add recipes to player's recipe book
         p.discoverRecipes(RecipeUtil.getRecipeKeys());
@@ -82,7 +83,7 @@ public class ListenerClass implements Listener {
 
         // tax join message
         if (ProtectionStones.getInstance().getConfigOptions().taxEnabled && ProtectionStones.getInstance().getConfigOptions().taxMessageOnJoin) {
-            Bukkit.getScheduler().runTaskAsynchronously(ProtectionStones.getInstance(), () -> {
+            PSScheduler.runAsync(() -> {
                 int amount = 0;
                 for (PSRegion psr : psp.getTaxEligibleRegions()) {
                     for (PSRegion.TaxPayment tp : psr.getTaxPaymentsDue()) {
@@ -557,10 +558,16 @@ public class ListenerClass implements Listener {
 
         switch (sp[0]) {
             case "player_command":
-                if (s != null) Bukkit.getServer().dispatchCommand(s, act.toString());
+                if (s instanceof Player senderPlayer) {
+                    // commands run as a player must run on the thread that owns the player
+                    PSScheduler.dispatchPlayerCommand(senderPlayer, act.toString());
+                } else if (s != null) {
+                    Bukkit.getServer().dispatchCommand(s, act.toString());
+                }
                 break;
             case "console_command":
-                Bukkit.getServer().dispatchCommand(Bukkit.getServer().getConsoleSender(), act.toString());
+                // console commands run on the global region thread (the main thread on Paper)
+                PSScheduler.dispatchConsoleCommand(act.toString());
                 break;
             case "message":
                 if (s != null) s.sendMessage(ChatColor.translateAlternateColorCodes('&', act.toString()));
@@ -583,7 +590,8 @@ public class ListenerClass implements Listener {
         if (!event.getRegion().getTypeOptions().eventsEnabled) return;
 
         // run on next tick (after the region is created to allow for edits to the region)
-        Bukkit.getServer().getScheduler().runTask(ProtectionStones.getInstance(), () -> {
+        // the creating player's thread owns the placed block, so schedule there
+        PSScheduler.runForNextTick(event.getPlayer(), () -> {
             // run custom commands (in config)
             for (String action : event.getRegion().getTypeOptions().regionCreateCommands) {
                 execEvent(action, event.getPlayer(), event.getPlayer().getName(), event.getRegion());

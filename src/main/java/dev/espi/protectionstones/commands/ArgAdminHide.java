@@ -15,6 +15,7 @@
 
 package dev.espi.protectionstones.commands;
 
+import dev.espi.protectionstones.utils.PSScheduler;
 import com.sk89q.worldguard.protection.managers.RegionManager;
 import com.sk89q.worldguard.protection.regions.ProtectedRegion;
 import dev.espi.protectionstones.PSL;
@@ -48,15 +49,16 @@ class ArgAdminHide {
             mgr = WGUtils.getRegionManagerWithWorld(w);
         }
 
-        Bukkit.getScheduler().runTaskAsynchronously(ProtectionStones.getInstance(), () -> {
+        PSScheduler.runAsync(() -> {
             // loop through regions that are protection stones and hide or unhide the block
             for (ProtectedRegion r : mgr.getRegions().values()) {
                 if (ProtectionStones.isPSRegion(r)) {
                     PSRegion region = PSRegion.fromWGRegion(w, r);
+                    // hide() and unhide() schedule the block change on the thread that owns the block
                     if (args[1].equalsIgnoreCase("hide")) {
-                        Bukkit.getScheduler().runTask(ProtectionStones.getInstance(), region::hide);
+                        region.hide();
                     } else if (args[1].equalsIgnoreCase("unhide")){
-                        Bukkit.getScheduler().runTask(ProtectionStones.getInstance(), region::unhide);
+                        region.unhide();
                     }
                 }
             }

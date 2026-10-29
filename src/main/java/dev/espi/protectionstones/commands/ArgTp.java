@@ -17,20 +17,23 @@ package dev.espi.protectionstones.commands;
 
 import dev.espi.protectionstones.*;
 import dev.espi.protectionstones.utils.ChatUtil;
+import dev.espi.protectionstones.utils.PSScheduler;
 import dev.espi.protectionstones.utils.UUIDCache;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
-import org.bukkit.scheduler.BukkitTask;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ArgTp implements PSCommandArg {
 
-    private static HashMap<UUID, Integer> waitCounter = new HashMap<>();
-    private static HashMap<UUID, BukkitTask> taskCounter = new HashMap<>();
+    // touched from player threads (one per region on Folia), so must be concurrent
+    private static Map<UUID, Integer> waitCounter = new ConcurrentHashMap<>();
+    private static Map<UUID, ScheduledTask> taskCounter = new ConcurrentHashMap<>();
 
     // /ps tp, /ps home
 
@@ -66,7 +69,7 @@ public class ArgTp implements PSCommandArg {
             return PSL.msg(p, PSL.TP_HELP.msg());
 
         if (args.length == 2) { // /ps tp [name/id]
-            Bukkit.getScheduler().runTaskAsynchronously(ProtectionStones.getInstance(), () -> {
+            PSScheduler.runAsync(() -> {
                 // get regions from the query
                 List<PSRegion> regions = ProtectionStones.getPSRegions(p.getWorld(), args[1]);
 
@@ -100,7 +103,7 @@ public class ArgTp implements PSCommandArg {
             UUID tpUuid = UUIDCache.getUUIDFromName(tpName);
 
             // run region search asynchronously to avoid blocking server thread
-            Bukkit.getScheduler().runTaskAsynchronously(ProtectionStones.getInstance(), () -> {
+            PSScheduler.runAsync(() -> {
                 List<PSRegion> regions = PSPlayer.fromUUID(tpUuid).getPSRegionsCrossWorld(p.getWorld(), false);
 
                 // check if region was found
@@ -128,6 +131,11 @@ public class ArgTp implements PSCommandArg {
     }
 
     static void teleportPlayer(Player p, PSRegion r) {
+        // callers run region lookups async; the rest (location reads, timers, teleports) belongs on the player's thread
+        PSScheduler.runFor(p, () -> teleportPlayerOwned(p, r));
+    }
+
+    private static void teleportPlayerOwned(Player p, PSRegion r) {
         if (r.getTypeOptions() == null) {
             PSL.msg(p, ChatColor.RED + "This region is problematic, and the block type (" + r.getType() + ") is not configured. Please contact an administrator.");
             Bukkit.getLogger().info(ChatColor.RED + "This region is problematic, and the block type (" + r.getType() + ") is not configured.");
@@ -138,15 +146,15 @@ public class ArgTp implements PSCommandArg {
         if (r.getTypeOptions().tpWaitingSeconds == 0 || p.hasPermission("protectionstones.tp.bypasswait")) {
             // no teleport delay
             PSL.msg(p, PSL.TPING.msg());
-            Bukkit.getScheduler().runTask(ProtectionStones.getInstance(), () -> p.teleport(r.getHome())); // run on main thread, not async
+            PSScheduler.teleport(p, r.getHome());
         } else if (!r.getTypeOptions().noMovingWhenTeleportWaiting) {
             // teleport delay, but doesn't care about moving
             p.sendMessage(PSL.TP_IN_SECONDS.msg().replace("%seconds%", "" + r.getTypeOptions().tpWaitingSeconds));
 
-            Bukkit.getScheduler().runTaskLater(ProtectionStones.getInstance(), () -> {
+            PSScheduler.runForLater(p, () -> {
                 PSL.msg(p, PSL.TPING.msg());
-                p.teleport(r.getHome());
-            }, 20 * r.getTypeOptions().tpWaitingSeconds);
+                PSScheduler.teleport(p, r.getHome());
+            }, null, 20L * r.getTypeOptions().tpWaitingSeconds);
 
         } else {// delay and not allowed to move
             PSL.msg(p, PSL.TP_IN_SECONDS.msg().replace("%seconds%", "" + r.getTypeOptions().tpWaitingSeconds));
@@ -158,7 +166,7 @@ public class ArgTp implements PSCommandArg {
 
             // add teleport wait tasks to queue
             waitCounter.put(uuid, 0);
-            taskCounter.put(uuid, Bukkit.getScheduler().runTaskTimer(ProtectionStones.getInstance(), () -> {
+            taskCounter.put(uuid, PSScheduler.runForTimer(p, () -> {
                         Player pl = Bukkit.getPlayer(uuid);
                         // cancel if the player is not on the server
                         if (pl == null) {
@@ -183,10 +191,10 @@ public class ArgTp implements PSCommandArg {
                         } else if (waitCounter.get(uuid) == r.getTypeOptions().tpWaitingSeconds * 4) { // * 4 since this loops 4 times a second
                             // if the timer has passed, teleport and cancel
                             PSL.msg(pl, PSL.TPING.msg());
-                            pl.teleport(r.getHome());
+                            PSScheduler.teleport(pl, r.getHome());
                             removeUUIDTimer(uuid);
                         }
-                    }, 5, 5) // loop 4 times a second
+                    }, () -> removeUUIDTimer(uuid), 5, 5) // loop 4 times a second; retired when the player leaves
             );
         }
     }

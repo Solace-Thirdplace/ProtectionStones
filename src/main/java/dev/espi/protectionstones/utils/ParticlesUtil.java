@@ -24,7 +24,8 @@ import org.bukkit.entity.Player;
 public class ParticlesUtil {
     public static void persistRedstoneParticle(Player p, Location l, Particle.DustOptions d, int occ) {
         for (int i = 0; i < occ; i++) {
-            Bukkit.getScheduler().runTaskLater(ProtectionStones.getInstance(), () -> {
+            // particles are sent to the player, so run on the player's thread; dropped if the player logs out
+            PSScheduler.runForLater(p, () -> {
                 if (!p.isOnline()) return;
 
                 // Stronger "glow marker" burst
@@ -41,7 +42,7 @@ public class ParticlesUtil {
                         0.0
                 );
 
-            }, i * 20L);
+            }, null, i * 20L);
         }
     }
 }

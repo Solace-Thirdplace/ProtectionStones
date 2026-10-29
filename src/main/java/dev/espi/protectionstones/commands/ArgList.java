@@ -15,6 +15,7 @@
 
 package dev.espi.protectionstones.commands;
 
+import dev.espi.protectionstones.utils.PSScheduler;
 import dev.espi.protectionstones.PSL;
 import dev.espi.protectionstones.PSPlayer;
 import dev.espi.protectionstones.PSRegion;
@@ -65,7 +66,7 @@ public class ArgList implements PSCommandArg {
         PSPlayer psp = PSPlayer.fromPlayer((Player) s);
 
         // run query async to reduce load
-        Bukkit.getScheduler().runTaskAsynchronously(ProtectionStones.getInstance(), () -> {
+        PSScheduler.runAsync(() -> {
             if (args.length == 1) {
                 List<PSRegion> regions = psp.getPSRegionsCrossWorld(psp.getPlayer().getWorld(), true);
                 display(s, regions, psp.getUuid(), true);

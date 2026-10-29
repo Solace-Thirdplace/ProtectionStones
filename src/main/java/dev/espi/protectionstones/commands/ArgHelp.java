@@ -45,12 +45,13 @@ public class ArgHelp implements PSCommandArg {
         }
     }
 
-    public static List<HelpEntry> helpMenu = new ArrayList<>();
+    // replaced as a whole on /ps reload and never mutated after it is published (read from player threads)
+    public static volatile List<HelpEntry> helpMenu = new ArrayList<>();
 
     public static void initHelpMenu() {
         String base = "/" + ProtectionStones.getInstance().getConfigOptions().base_command + " ";
 
-        helpMenu.clear();
+        List<HelpEntry> helpMenu = new ArrayList<>();
         helpMenu.add(new HelpEntry(sendWithPerm(PSL.INFO_HELP.msg(), PSL.INFO_HELP_DESC.msg(), base + "info"), "protectionstones.info"));
         helpMenu.add(new HelpEntry(sendWithPerm(PSL.ADDREMOVE_HELP.msg(), PSL.ADDREMOVE_HELP_DESC.msg(), base), "protectionstones.members"));
         helpMenu.add(new HelpEntry(sendWithPerm(PSL.ADDREMOVE_OWNER_HELP.msg(), PSL.ADDREMOVE_OWNER_HELP_DESC.msg(), base), "protectionstones.owners"));
@@ -78,6 +79,7 @@ public class ArgHelp implements PSCommandArg {
         helpMenu.add(new HelpEntry(sendWithPerm(PSL.REGION_HELP.msg(), PSL.REGION_HELP_DESC.msg(), base + "region"), "protectionstones.region"));
         helpMenu.add(new HelpEntry(sendWithPerm(PSL.ADMIN_HELP.msg(), PSL.ADMIN_HELP_DESC.msg(), base + "admin"), "protectionstones.admin"));
         helpMenu.add(new HelpEntry(sendWithPerm(PSL.RELOAD_HELP.msg(), PSL.RELOAD_HELP_DESC.msg(), base + "reload"), "protectionstones.admin"));
+        ArgHelp.helpMenu = helpMenu;
     }
 
     @Override

@@ -81,7 +81,8 @@ class RegionPlaceholders {
         } else if (identifier.equals("alias")) {
             return r.getTypeOptions().alias;
         } else if (identifier.equals("is_hidden")) {
-            return r.isHidden() + "";
+            // placeholders may be resolved async or on another region's thread, which must not read the block
+            return r.isHiddenSnapshot() + "";
         } else if (identifier.equals("home_location")) {
             return String.format("%.1f %.1f %.1f", r.getHome().getX(), r.getHome().getY(), r.getHome().getZ());
         } else if (identifier.equals("is_for_sale")) {
