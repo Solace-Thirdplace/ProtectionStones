@@ -31,6 +31,11 @@ import org.bukkit.entity.Player;
 
 import javax.annotation.Nullable;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
@@ -583,7 +588,108 @@ public abstract class PSRegion {
      * @return whether or not the protection block is hidden (/ps hide)
      */
     public boolean isHidden() {
-        return !this.getType().equals(BlockUtil.getProtectBlockType(this.getProtectBlock()));
+        boolean hidden = !this.getType().equals(BlockUtil.getProtectBlockType(this.getProtectBlock()));
+        recordHidden(hidden);
+        return hidden;
+    }
+
+    // -=-=-=- last known hidden state, for readers that do not own the protection block -=-=-=-
+
+    private record HiddenSnapshot(boolean hidden, long checkedAt) {
+    }
+
+    private record HiddenRefresh(CompletableFuture<Boolean> result, long startedAt) {
+    }
+
+    // keyed by world UUID + region id; written whenever the owning thread reads or changes the protection block
+    private static final Map<String, HiddenSnapshot> HIDDEN_SNAPSHOTS = new ConcurrentHashMap<>();
+    private static final Map<String, HiddenRefresh> HIDDEN_REFRESHES = new ConcurrentHashMap<>();
+    private static final long HIDDEN_SNAPSHOT_TTL_MS = 5000L;
+    private static final long HIDDEN_FIRST_READ_WAIT_MS = 100L;
+
+    private String hiddenKey() {
+        return getWorld().getUID() + ":" + getId();
+    }
+
+    private void recordHidden(boolean hidden) {
+        HIDDEN_SNAPSHOTS.put(hiddenKey(), new HiddenSnapshot(hidden, System.currentTimeMillis()));
+    }
+
+    /**
+     * Whether or not the protection block is hidden, safe to call from any thread (for example PlaceholderAPI
+     * placeholders, which may be resolved asynchronously or on another region's thread).
+     *
+     * <p>On the thread that owns the protection block this is the same as {@link #isHidden()}. Elsewhere it returns
+     * the last value read on the owning thread, refreshing it there when it is older than a few seconds. The first
+     * read from a non-tick thread waits briefly for that refresh; a read from another tick thread never waits, and
+     * returns false until the refresh has run.</p>
+     *
+     * @return whether or not the protection block is hidden, as last seen by the thread that owns it
+     */
+    public boolean isHiddenSnapshot() {
+        Location loc = getProtectBlock().getLocation();
+        if (PSScheduler.isOwnedByCurrentRegion(loc)) {
+            return isHidden();
+        }
+
+        String key = hiddenKey();
+        HiddenSnapshot snapshot = HIDDEN_SNAPSHOTS.get(key);
+        long now = System.currentTimeMillis();
+        if (snapshot != null && now - snapshot.checkedAt() < HIDDEN_SNAPSHOT_TTL_MS) {
+            return snapshot.hidden();
+        }
+
+        CompletableFuture<Boolean> refresh = refreshHiddenSnapshot(key, loc, now);
+        if (snapshot != null) {
+            return snapshot.hidden();
+        }
+        // first read of this region: a non-tick thread (async chat, scoreboard threads) can wait a moment for the
+        // owning thread; a tick thread must not block on another region
+        if (!Bukkit.isPrimaryThread()) {
+            try {
+                return refresh.get(HIDDEN_FIRST_READ_WAIT_MS, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (ExecutionException | TimeoutException ignored) {
+            }
+        }
+        return false;
+    }
+
+    private CompletableFuture<Boolean> refreshHiddenSnapshot(String key, Location loc, long now) {
+        // one refresh in flight per region; a refresh that never ran (its chunk failed to load) is retried after
+        // the TTL
+        HiddenRefresh[] created = new HiddenRefresh[1];
+        HiddenRefresh pending = HIDDEN_REFRESHES.compute(key, (k, existing) -> {
+            if (existing != null && !existing.result().isDone() && now - existing.startedAt() < HIDDEN_SNAPSHOT_TTL_MS) {
+                return existing;
+            }
+            return created[0] = new HiddenRefresh(new CompletableFuture<>(), now);
+        });
+        if (pending != created[0]) {
+            return pending.result();
+        }
+
+        CompletableFuture<Boolean> result = pending.result();
+        Runnable read = () -> {
+            try {
+                result.complete(isHidden());
+            } catch (Throwable t) {
+                result.completeExceptionally(t);
+            } finally {
+                HIDDEN_REFRESHES.remove(key, pending);
+            }
+        };
+        // load the chunk if needed (as a direct read used to), then read the block on the thread that owns it
+        loc.getWorld().getChunkAtAsync(loc).whenComplete((chunk, err) -> {
+            if (err != null) {
+                result.completeExceptionally(err);
+                HIDDEN_REFRESHES.remove(key, pending);
+            } else {
+                PSScheduler.runAt(loc, read);
+            }
+        });
+        return result;
     }
 
     /**
@@ -620,6 +726,7 @@ public abstract class PSRegion {
         }
         if (!isHidden()) {
             getProtectBlock().setType(Material.AIR);
+            recordHidden(true);
             return true;
         } else {
             return false;
@@ -646,6 +753,7 @@ public abstract class PSRegion {
             } else {
                 getProtectBlock().setType(Material.getMaterial(getType()));
             }
+            recordHidden(false);
             return true;
         } else {
             return false;
