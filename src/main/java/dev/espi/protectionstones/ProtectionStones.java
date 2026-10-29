@@ -15,6 +15,7 @@
 
 package dev.espi.protectionstones;
 
+import dev.espi.protectionstones.utils.PSScheduler;
 import com.electronwill.nightconfig.core.Config;
 import com.electronwill.nightconfig.core.file.CommentedFileConfig;
 import com.electronwill.nightconfig.toml.TomlFormat;
@@ -48,6 +49,7 @@ import net.luckperms.api.LuckPerms;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -92,7 +94,7 @@ public class ProtectionStones extends JavaPlugin {
     private boolean placeholderAPISupportEnabled = false;
 
     // ps toggle/on/off list
-    public static Set<UUID> toggleList = new HashSet<>();
+    public static Set<UUID> toggleList = ConcurrentHashMap.newKeySet(); // written from player threads
 
     /* ~~~~~~~~~~ Instance methods ~~~~~~~~~~~~ */
 
@@ -318,6 +320,12 @@ public class ProtectionStones extends JavaPlugin {
      */
 
     public static boolean isPSNameAlreadyUsed(String name) {
+        synchronized (regionNameToID) {
+            return isPSNameAlreadyUsedLocked(name);
+        }
+    }
+
+    private static boolean isPSNameAlreadyUsedLocked(String name) {
         for (UUID worldUid : regionNameToID.keySet()) {
             RegionManager rgm = WGUtils.getRegionManagerWithWorld(Bukkit.getWorld(worldUid));
 
@@ -631,13 +639,15 @@ public class ProtectionStones extends JavaPlugin {
                     }
                 }
             }
-            regionNameToID.put(w.getUID(), m);
+            synchronized (regionNameToID) {
+                regionNameToID.put(w.getUID(), m);
+            }
         }
 
         // uuid cache
         getLogger().info("Building UUID cache... (if slow change async-load-uuid-cache in the config to true)");
         if (configOptions.asyncLoadUUIDCache) { // async load
-            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            PSScheduler.runAsync(() -> {
                 for (OfflinePlayer op : Bukkit.getOfflinePlayers()) {
                     UUIDCache.storeUUIDNamePair(op.getUniqueId(), op.getName());
                 }

@@ -15,6 +15,7 @@
 
 package dev.espi.protectionstones.commands;
 
+import dev.espi.protectionstones.utils.PSScheduler;
 import com.sk89q.worldguard.protection.managers.RegionManager;
 import com.sk89q.worldguard.protection.regions.ProtectedRegion;
 import dev.espi.protectionstones.PSL;
@@ -100,7 +101,7 @@ class ArgAdminCleanup {
         String finalAlias = alias;
         int finalDays = days;
 
-        Bukkit.getScheduler().runTaskAsynchronously(ProtectionStones.getInstance(), () -> {
+        PSScheduler.runAsync(() -> {
             PSL.msg(p, PSL.ADMIN_CLEANUP_HEADER.msg()
                     .replace("%arg%", cleanupOperation)
                     .replace("%days%", "" + finalDays));
@@ -158,7 +159,9 @@ class ArgAdminCleanup {
 
     static private void regionLoop(Iterator<PSRegion> deleteRegionsIterator, CommandSender p, boolean isRemoveOperation) {
         if (deleteRegionsIterator.hasNext()) {
-            Bukkit.getScheduler().runTaskLater(ProtectionStones.getInstance(), () ->
+            // one region per tick on the global region thread (the main thread on Paper);
+            // deleteRegion(true) removes the block on the thread that owns it
+            PSScheduler.runGlobalLater(() ->
                     processRegion(deleteRegionsIterator, p, isRemoveOperation), 1);
         } else {
             PSL.msg(p, PSL.ADMIN_CLEANUP_FOOTER.msg()

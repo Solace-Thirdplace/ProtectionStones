@@ -15,6 +15,7 @@
 
 package dev.espi.protectionstones.commands;
 
+import dev.espi.protectionstones.utils.PSScheduler;
 import com.sk89q.worldguard.protection.managers.RegionManager;
 import com.sk89q.worldguard.protection.regions.ProtectedRegion;
 import dev.espi.protectionstones.PSL;
@@ -79,7 +80,7 @@ class ArgAdminLastlogon {
         PSL.msg(p, PSL.ADMIN_LASTLOGONS_HEADER.msg()
                 .replace("%days%", "" + minDays));
 
-        Bukkit.getScheduler().runTaskAsynchronously(ProtectionStones.getInstance(), () -> {
+        PSScheduler.runAsync(() -> {
             Set<UUID> ownerUuids = collectRegionOwnerUuids();
             List<LastLogonEntry> matchingEntries = new ArrayList<>();
             long now = System.currentTimeMillis();
@@ -98,7 +99,7 @@ class ArgAdminLastlogon {
 
             matchingEntries.sort(Comparator.comparing(entry -> entry.playerName, String.CASE_INSENSITIVE_ORDER));
 
-            Bukkit.getScheduler().runTask(ProtectionStones.getInstance(), () ->
+            PSScheduler.runGlobalNextTick(() ->
                     sendLastLogonEntries(p, matchingEntries, ownerUuids.size(), 0));
         });
 
@@ -116,7 +117,7 @@ class ArgAdminLastlogon {
 
         if (endIndex < entries.size()) {
             int nextIndex = endIndex;
-            Bukkit.getScheduler().runTaskLater(ProtectionStones.getInstance(),
+            PSScheduler.runGlobalLater(
                     () -> sendLastLogonEntries(sender, entries, checkedCount, nextIndex), 1L);
             return;
         }

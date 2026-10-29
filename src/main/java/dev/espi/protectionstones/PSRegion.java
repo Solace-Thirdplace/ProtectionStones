@@ -19,6 +19,7 @@ import com.sk89q.worldedit.math.BlockVector2;
 import com.sk89q.worldguard.protection.managers.RegionManager;
 import com.sk89q.worldguard.protection.regions.ProtectedRegion;
 import dev.espi.protectionstones.utils.BlockUtil;
+import dev.espi.protectionstones.utils.PSScheduler;
 import dev.espi.protectionstones.utils.WGUtils;
 import net.milkbowl.vault.economy.EconomyResponse;
 import org.bukkit.Bukkit;
@@ -149,16 +150,19 @@ public abstract class PSRegion {
 
         List<PSRegion> l = new ArrayList<>();
 
-        List<String> rIds = ProtectionStones.regionNameToID.get(w.getUID()).get(name);
-        if (rIds == null) return l;
+        // the name cache is shared by every region thread on Folia
+        synchronized (ProtectionStones.regionNameToID) {
+            List<String> rIds = ProtectionStones.regionNameToID.get(w.getUID()).get(name);
+            if (rIds == null) return l;
 
-        for (int i = 0; i < rIds.size(); i++) {
-            String id = rIds.get(i);
-            if (rgm.getRegion(id) == null) { // cleanup cache
-                rIds.remove(i);
-                i--;
-            } else {
-                l.add(fromWGRegion(w, rgm.getRegion(id)));
+            for (int i = 0; i < rIds.size(); i++) {
+                String id = rIds.get(i);
+                if (rgm.getRegion(id) == null) { // cleanup cache
+                    rIds.remove(i);
+                    i--;
+                } else {
+                    l.add(fromWGRegion(w, rgm.getRegion(id)));
+                }
             }
         }
         return l;
@@ -173,9 +177,11 @@ public abstract class PSRegion {
 
     public static HashMap<World, List<PSRegion>> fromName(String name) {
         HashMap<World, List<PSRegion>> regions = new HashMap<>();
-        for (UUID worldUid : ProtectionStones.regionNameToID.keySet()) {
-            World w = Bukkit.getWorld(worldUid);
-            regions.put(w, fromName(w, name));
+        synchronized (ProtectionStones.regionNameToID) {
+            for (UUID worldUid : ProtectionStones.regionNameToID.keySet()) {
+                World w = Bukkit.getWorld(worldUid);
+                regions.put(w, fromName(w, name));
+            }
         }
         return regions;
     }
@@ -572,7 +578,8 @@ public abstract class PSRegion {
     // -=-=-=-=- Other -=-=-=-=-=-
 
     /**
-     * Must be run sync (calls Bukkit API)
+     * Must be run on the thread that owns the protection block (the main thread on Paper, the block's region thread
+     * on Folia), since it reads the block.
      * @return whether or not the protection block is hidden (/ps hide)
      */
     public boolean isHidden() {
@@ -580,10 +587,37 @@ public abstract class PSRegion {
     }
 
     /**
+     * Run a task on the thread that owns this region's protection block: immediately if the calling thread
+     * already owns it, otherwise scheduled on the owning region (the main thread on Paper).
+     * @param task the task that reads or writes the protection block
+     */
+    public void runAtProtectBlock(Runnable task) {
+        PSScheduler.runAt(getProtectBlock().getLocation(), task);
+    }
+
+    /**
+     * Set the protection block to air if it is not hidden, on the thread that owns the block.
+     * Used when deleting a region with deleteBlock = true.
+     */
+    protected void removeProtectBlock() {
+        runAtProtectBlock(() -> {
+            if (!isHidden()) {
+                getProtectBlock().setType(Material.AIR);
+            }
+        });
+    }
+
+    /**
      * Hides the protection block, if it is not hidden.
+     * If called from a thread that does not own the protection block, the change is scheduled on the owning
+     * thread and true is returned.
      * @return whether or not the block was hidden
      */
     public boolean hide() {
+        if (!PSScheduler.isOwnedByCurrentRegion(getProtectBlock().getLocation())) {
+            runAtProtectBlock(this::hide);
+            return true;
+        }
         if (!isHidden()) {
             getProtectBlock().setType(Material.AIR);
             return true;
@@ -594,9 +628,15 @@ public abstract class PSRegion {
 
     /**
      * Unhides the protection block, if it is hidden.
+     * If called from a thread that does not own the protection block, the change is scheduled on the owning
+     * thread and true is returned.
      * @return whether or not the block was unhidden
      */
     public boolean unhide() {
+        if (!PSScheduler.isOwnedByCurrentRegion(getProtectBlock().getLocation())) {
+            runAtProtectBlock(this::unhide);
+            return true;
+        }
         if (isHidden()) {
             if (getType().startsWith("PLAYER_HEAD")) {
                 getProtectBlock().setType(Material.PLAYER_HEAD);
@@ -643,13 +683,19 @@ public abstract class PSRegion {
      * @param type the type of protection region to switch to
      */
     public void setType(PSProtectBlock type) {
-        if (!isHidden()) {
-            Material set = Material.matchMaterial(type.type) == null ? Material.PLAYER_HEAD : Material.matchMaterial(type.type);
-            getProtectBlock().setType(set);
-            if (type.type.startsWith("PLAYER_HEAD") && type.type.split(":").length > 1) {
-                BlockUtil.setHeadType(type.type, getProtectBlock());
+        // capture the current type now: subclasses update the stored type right after this call, and the block
+        // change below may run later on the thread that owns the block
+        String previousType = getType();
+        runAtProtectBlock(() -> {
+            Block block = getProtectBlock();
+            if (previousType != null && previousType.equals(BlockUtil.getProtectBlockType(block))) { // not hidden
+                Material set = Material.matchMaterial(type.type) == null ? Material.PLAYER_HEAD : Material.matchMaterial(type.type);
+                block.setType(set);
+                if (type.type.startsWith("PLAYER_HEAD") && type.type.split(":").length > 1) {
+                    BlockUtil.setHeadType(type.type, block);
+                }
             }
-        }
+        });
     }
 
     /**
