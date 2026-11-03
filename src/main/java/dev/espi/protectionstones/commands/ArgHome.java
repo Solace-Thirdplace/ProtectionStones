@@ -15,6 +15,7 @@
 
 package dev.espi.protectionstones.commands;
 
+import dev.espi.protectionstones.utils.PSScheduler;
 import dev.espi.protectionstones.*;
 import dev.espi.protectionstones.utils.ChatUtil;
 import dev.espi.protectionstones.utils.MiscUtil;
@@ -30,11 +31,12 @@ import org.bukkit.entity.Player;
 import org.bukkit.util.StringUtil;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 public class ArgHome implements PSCommandArg {
 
-    private static HashMap<UUID, List<String>> tabCache = new HashMap<>();
+    private static Map<UUID, List<String>> tabCache = new ConcurrentHashMap<>(); // tab completion runs on player threads
 
     @Override
     public List<String> getNames() {
@@ -80,7 +82,7 @@ public class ArgHome implements PSCommandArg {
                 // cache home regions
                 tabCache.put(p.getUniqueId(), regionNames);
 
-                Bukkit.getScheduler().runTaskLater(ProtectionStones.getInstance(), () -> {
+                PSScheduler.runAsyncLater(() -> {
                     tabCache.remove(p.getUniqueId());
                 }, 200); // remove cache after 10 seconds
             }
@@ -128,7 +130,7 @@ public class ArgHome implements PSCommandArg {
         if (args.length != 2 && args.length != 1)
             return PSL.msg(p, PSL.HOME_HELP.msg());
 
-        Bukkit.getScheduler().runTaskAsynchronously(ProtectionStones.getInstance(), () -> {
+        PSScheduler.runAsync(() -> {
             PSPlayer psp = PSPlayer.fromPlayer(p);
             if (args.length == 1) {
                 // just "/ps home"

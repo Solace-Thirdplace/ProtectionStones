@@ -15,6 +15,7 @@
 
 package dev.espi.protectionstones.commands;
 
+import dev.espi.protectionstones.utils.PSScheduler;
 import dev.espi.protectionstones.PSProtectBlock;
 import dev.espi.protectionstones.PSL;
 import dev.espi.protectionstones.ProtectionStones;
@@ -73,16 +74,21 @@ public class ArgGive implements PSCommandArg {
         if (args.length >= 4 && NumberUtils.isNumber(args[3]))
             item.setAmount(Integer.parseInt(args[3]));
 
-        if (!ps.getInventory().addItem(item).isEmpty()) {
-            if (ProtectionStones.getInstance().getConfigOptions().dropItemWhenInventoryFull) {
-                PSL.msg(ps, PSL.NO_ROOM_DROPPING_ON_FLOOR.msg());
-                ps.getWorld().dropItem(ps.getLocation(), cp.createItem());
-            } else {
-                return PSL.msg(p, PSL.GIVE_NO_INVENTORY_ROOM.msg());
+        // the receiving player's inventory belongs to the receiving player's thread
+        PSScheduler.runFor(ps, () -> {
+            if (!ps.getInventory().addItem(item).isEmpty()) {
+                if (ProtectionStones.getInstance().getConfigOptions().dropItemWhenInventoryFull) {
+                    PSL.msg(ps, PSL.NO_ROOM_DROPPING_ON_FLOOR.msg());
+                    ps.getWorld().dropItem(ps.getLocation(), cp.createItem());
+                } else {
+                    PSL.msg(p, PSL.GIVE_NO_INVENTORY_ROOM.msg());
+                    return;
+                }
             }
-        }
 
-        return PSL.msg(p, PSL.GIVE_GIVEN.msg().replace("%block%", args[1]).replace("%player%", Bukkit.getPlayer(args[2]).getDisplayName()));
+            PSL.msg(p, PSL.GIVE_GIVEN.msg().replace("%block%", args[1]).replace("%player%", ps.getDisplayName()));
+        });
+        return true;
     }
 
     // tab completion

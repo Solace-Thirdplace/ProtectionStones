@@ -15,6 +15,7 @@
 
 package dev.espi.protectionstones.commands;
 
+import dev.espi.protectionstones.utils.PSScheduler;
 import dev.espi.protectionstones.PSL;
 import dev.espi.protectionstones.ProtectionStones;
 import org.bukkit.command.CommandSender;
@@ -55,8 +56,12 @@ public class ArgReload implements PSCommandArg {
             return true;
         }
         PSL.msg(p, PSL.RELOAD_START.msg());
-        ProtectionStones.loadConfig(true);
-        PSL.msg(p, PSL.RELOAD_COMPLETE.msg());
+        // reloading re-registers recipes and restarts the economy timers: global state, so run it on the global
+        // region thread (immediately on Paper, and on Folia when run from the console)
+        PSScheduler.runGlobal(() -> {
+            ProtectionStones.loadConfig(true);
+            PSL.msg(p, PSL.RELOAD_COMPLETE.msg());
+        });
         return true;
     }
 

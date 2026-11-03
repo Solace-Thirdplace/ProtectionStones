@@ -15,6 +15,7 @@
 
 package dev.espi.protectionstones;
 
+import dev.espi.protectionstones.utils.PSScheduler;
 import com.sk89q.worldedit.math.BlockVector3;
 import com.sk89q.worldguard.LocalPlayer;
 import com.sk89q.worldguard.bukkit.WorldGuardPlugin;
@@ -41,9 +42,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class BlockHandler {
-    private static HashMap<Player, Double> lastProtectStonePlaced = new HashMap<>();
+    private static Map<Player, Double> lastProtectStonePlaced = new ConcurrentHashMap<>(); // written from player threads
 
     private static String checkCooldown(Player p) {
         double currentTime = System.currentTimeMillis();
@@ -275,7 +278,7 @@ public class BlockHandler {
         if (blockOptions.autoHide) {
             PSL.msg(p, PSL.REGION_HIDDEN.msg());
             // run on next tick so placing tile entities don't complain
-            Bukkit.getScheduler().runTask(ProtectionStones.getInstance(), () -> l.getBlock().setType(Material.AIR));
+            PSScheduler.runAtNextTick(l, () -> l.getBlock().setType(Material.AIR));
         }
 
         if (blockOptions.startWithTaxAutopay) {
@@ -312,7 +315,7 @@ public class BlockHandler {
             // actually do auto merge
             if (!showGUI) {
                 PSRegion finalMergeTo = mergeTo;
-                Bukkit.getScheduler().runTaskAsynchronously(ProtectionStones.getInstance(), () -> {
+                PSScheduler.runAsync(() -> {
                     try {
                         WGMerge.mergeRealRegions(p.getWorld(), r.getWGRegionManager(), finalMergeTo, Arrays.asList(finalMergeTo, r));
                         PSL.msg(p, PSL.MERGE_AUTO_MERGED.msg().replace("%region%", finalMergeTo.getId()));

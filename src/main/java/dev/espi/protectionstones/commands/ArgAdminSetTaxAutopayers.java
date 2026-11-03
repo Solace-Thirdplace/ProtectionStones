@@ -17,6 +17,7 @@
 
 package dev.espi.protectionstones.commands;
 
+import dev.espi.protectionstones.utils.PSScheduler;
 import com.sk89q.worldguard.protection.regions.ProtectedRegion;
 import dev.espi.protectionstones.PSL;
 import dev.espi.protectionstones.PSRegion;
@@ -34,7 +35,7 @@ class ArgAdminSetTaxAutopayers {
 
         PSL.msg(s, ChatColor.GRAY + "Scanning through regions, and setting tax autopayers for regions that don't have one...");
 
-        Bukkit.getScheduler().runTaskAsynchronously(ProtectionStones.getInstance(), () -> {
+        PSScheduler.runAsync(() -> {
             WGUtils.getAllRegionManagers().forEach((w, rgm) -> {
                 for (ProtectedRegion r : rgm.getRegions().values()) {
                     PSRegion psr = PSRegion.fromWGRegion(w, r);

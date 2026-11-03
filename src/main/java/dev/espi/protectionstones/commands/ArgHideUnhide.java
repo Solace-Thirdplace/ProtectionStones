@@ -65,17 +65,22 @@ public class ArgHideUnhide implements PSCommandArg {
         if (WGUtils.hasNoAccess(r.getWGRegion(), p, WorldGuardPlugin.inst().wrapPlayer(p), false))
             return PSL.msg(p, PSL.NO_ACCESS.msg());
 
-        if (r.isHidden()) {
-            if (arg[0].equals("hide")) {
-                return PSL.msg(p, PSL.ALREADY_HIDDEN.msg());
+        // the protection block can be outside the player's region thread on Folia
+        r.runAtProtectBlock(() -> {
+            if (r.isHidden()) {
+                if (arg[0].equals("hide")) {
+                    PSL.msg(p, PSL.ALREADY_HIDDEN.msg());
+                    return;
+                }
+                r.unhide();
+            } else {
+                if (arg[0].equals("unhide")) {
+                    PSL.msg(p, PSL.ALREADY_NOT_HIDDEN.msg());
+                    return;
+                }
+                r.hide();
             }
-            r.unhide();
-        } else {
-            if (arg[0].equals("unhide")) {
-                return PSL.msg(p, PSL.ALREADY_NOT_HIDDEN.msg());
-            }
-            r.hide();
-        }
+        });
         return true;
     }
 

@@ -322,25 +322,27 @@ public class PSPlayer {
         // set entry format: "worldName regionId"
         Set<String> regionIdAdded = regions.stream().map(r -> w.getName() + " " + r.getId()).collect(Collectors.toSet());
 
-        // obtain cross-world named worlds
-        ProtectionStones.regionNameToID.forEach((rw, rs) -> {
-            World world = Bukkit.getWorld(rw);
-            RegionManager rm = WGUtils.getRegionManagerWithWorld(world);
-            if (rm != null) {
-                rs.values().forEach(rIds -> rIds.forEach(rId -> {
+        // obtain cross-world named worlds (the name cache is shared by every region thread on Folia)
+        synchronized (ProtectionStones.regionNameToID) {
+            ProtectionStones.regionNameToID.forEach((rw, rs) -> {
+                World world = Bukkit.getWorld(rw);
+                RegionManager rm = WGUtils.getRegionManagerWithWorld(world);
+                if (rm != null) {
+                    rs.values().forEach(rIds -> rIds.forEach(rId -> {
 
-                    ProtectedRegion r = rm.getRegion(rId);
-                    if (r != null && r.getOwners().contains(uuid) && ProtectionStones.isPSRegion(r)) {
-                        // check if it has already been added
-                        String setId = world.getName() + " " + r.getId();
-                        if (!world.getName().equals(w.getName()) || !regionIdAdded.contains(setId)) {
-                            regions.add(PSRegion.fromWGRegion(world, r));
-                            regionIdAdded.add(setId);
+                        ProtectedRegion r = rm.getRegion(rId);
+                        if (r != null && r.getOwners().contains(uuid) && ProtectionStones.isPSRegion(r)) {
+                            // check if it has already been added
+                            String setId = world.getName() + " " + r.getId();
+                            if (!world.getName().equals(w.getName()) || !regionIdAdded.contains(setId)) {
+                                regions.add(PSRegion.fromWGRegion(world, r));
+                                regionIdAdded.add(setId);
+                            }
                         }
-                    }
-                }));
-            }
-        });
+                    }));
+                }
+            });
+        }
 
         return regions;
     }

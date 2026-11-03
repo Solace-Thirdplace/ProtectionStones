@@ -21,10 +21,12 @@ import com.sk89q.worldguard.util.profile.Profile;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class UUIDCache {
-    private static Map<UUID, String> uuidToName = new HashMap<>();
-    private static Map<String, UUID> nameToUUID = new HashMap<>();
+    // written on join (player threads) and by the async startup load
+    private static Map<UUID, String> uuidToName = new ConcurrentHashMap<>();
+    private static Map<String, UUID> nameToUUID = new ConcurrentHashMap<>();
 
     // toLowerCase for case insensitive search
 

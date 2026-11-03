@@ -115,9 +115,11 @@ public class PSConfig {
             Logger.getLogger(ProtectionStones.class.getName()).log(Level.SEVERE, null, ex);
         }
 
-        // keep in mind that there is /ps reload, so clear arrays before adding config options!
-        // clear data (for /ps reload)
-        ProtectionStones.protectionStonesOptions.clear();
+        // keep in mind that there is /ps reload, so start from empty options!
+        // The block options and the base64 head map are built in local maps and swapped in at the end: on Folia,
+        // region threads keep reading the old maps while /ps reload runs on the global region thread.
+        HashMap<String, PSProtectBlock> newOptions = new HashMap<>();
+        HashMap<String, String> newUuidToBase64Head = new HashMap<>(BlockUtil.uuidToBase64Head);
 
         // create config object
         if (ProtectionStones.config == null) {
@@ -142,6 +144,7 @@ public class PSConfig {
         // load protection stones to options map
         if (ProtectionStones.blockDataFolder.listFiles().length == 0) {
             ProtectionStones.getPluginLogger().warning("The blocks folder is empty! You do not have any protection blocks configured!");
+            ProtectionStones.protectionStonesOptions = newOptions;
         } else {
 
             // temp file to load in default ps block config
@@ -153,6 +156,7 @@ public class PSConfig {
                 }
             } catch (IOException e) {
                 e.printStackTrace();
+                ProtectionStones.protectionStonesOptions = newOptions; // (empty) same as clearing before the reload
                 return;
             }
             CommentedFileConfig template = CommentedFileConfig.of(tempFile);
@@ -198,11 +202,11 @@ public class PSConfig {
                 }
 
                 // check for duplicates
-                if (ProtectionStones.isProtectBlockType(b.type)) {
+                if (newOptions.containsKey(b.type)) {
                     ProtectionStones.getPluginLogger().warning("Duplicate block type found! Ignoring the extra block " + b.type);
                     continue;
                 }
-                if (ProtectionStones.getProtectBlockFromAlias(b.alias) != null) {
+                if (ProtectionStones.getProtectBlockFromAlias(newOptions, b.alias) != null) {
                     ProtectionStones.getPluginLogger().warning("Duplicate block alias found! Ignoring the extra block " + b.alias);
                     continue;
                 }
@@ -214,16 +218,20 @@ public class PSConfig {
                 if (BlockUtil.isBase64PSHead(b.type)) {
                     String nuuid = BlockUtil.getUUIDFromBase64PS(b);
 
-                    BlockUtil.uuidToBase64Head.put(nuuid, b.type.split(":")[1]);
+                    newUuidToBase64Head.put(nuuid, b.type.split(":")[1]);
                     b.type = "PLAYER_HEAD:" + nuuid;
                 }
 
-                ProtectionStones.protectionStonesOptions.put(b.type, b); // add block
+                newOptions.put(b.type, b); // add block
             }
 
             // cleanup temp file
             template.close();
             tempFile.delete();
+
+            // publish the new maps (the head map first, since items for the new options read it)
+            BlockUtil.uuidToBase64Head = newUuidToBase64Head;
+            ProtectionStones.protectionStonesOptions = newOptions;
 
             // setup crafting recipes for all blocks
             RecipeUtil.setupPSRecipes();

@@ -261,8 +261,8 @@ public class WGMerge {
         PSRegion nRegion = PSRegion.fromWGRegion(w, mergeRegions(newID, root, decomposedMerge));
         for (PSRegion r : merge) {
             if (!r.getId().equals(newID)) {
-                // run delete event for non-root real regions
-                Bukkit.getScheduler().runTask(ProtectionStones.getInstance(), () -> r.deleteRegion(false));
+                // run delete event for non-root real regions, on the thread that owns the region's protection block
+                PSScheduler.runAtNextTick(r.getProtectBlock().getLocation(), () -> r.deleteRegion(false));
             } else {
                 rm.removeRegion(r.getId());
             }

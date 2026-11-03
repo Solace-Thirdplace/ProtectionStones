@@ -19,6 +19,7 @@ import com.sk89q.worldedit.math.BlockVector2;
 import com.sk89q.worldguard.protection.managers.RegionManager;
 import com.sk89q.worldguard.protection.regions.ProtectedRegion;
 import dev.espi.protectionstones.utils.BlockUtil;
+import dev.espi.protectionstones.utils.PSScheduler;
 import dev.espi.protectionstones.utils.WGUtils;
 import net.milkbowl.vault.economy.EconomyResponse;
 import org.bukkit.Bukkit;
@@ -30,6 +31,11 @@ import org.bukkit.entity.Player;
 
 import javax.annotation.Nullable;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
@@ -149,16 +155,19 @@ public abstract class PSRegion {
 
         List<PSRegion> l = new ArrayList<>();
 
-        List<String> rIds = ProtectionStones.regionNameToID.get(w.getUID()).get(name);
-        if (rIds == null) return l;
+        // the name cache is shared by every region thread on Folia
+        synchronized (ProtectionStones.regionNameToID) {
+            List<String> rIds = ProtectionStones.regionNameToID.get(w.getUID()).get(name);
+            if (rIds == null) return l;
 
-        for (int i = 0; i < rIds.size(); i++) {
-            String id = rIds.get(i);
-            if (rgm.getRegion(id) == null) { // cleanup cache
-                rIds.remove(i);
-                i--;
-            } else {
-                l.add(fromWGRegion(w, rgm.getRegion(id)));
+            for (int i = 0; i < rIds.size(); i++) {
+                String id = rIds.get(i);
+                if (rgm.getRegion(id) == null) { // cleanup cache
+                    rIds.remove(i);
+                    i--;
+                } else {
+                    l.add(fromWGRegion(w, rgm.getRegion(id)));
+                }
             }
         }
         return l;
@@ -173,9 +182,11 @@ public abstract class PSRegion {
 
     public static HashMap<World, List<PSRegion>> fromName(String name) {
         HashMap<World, List<PSRegion>> regions = new HashMap<>();
-        for (UUID worldUid : ProtectionStones.regionNameToID.keySet()) {
-            World w = Bukkit.getWorld(worldUid);
-            regions.put(w, fromName(w, name));
+        synchronized (ProtectionStones.regionNameToID) {
+            for (UUID worldUid : ProtectionStones.regionNameToID.keySet()) {
+                World w = Bukkit.getWorld(worldUid);
+                regions.put(w, fromName(w, name));
+            }
         }
         return regions;
     }
@@ -572,20 +583,150 @@ public abstract class PSRegion {
     // -=-=-=-=- Other -=-=-=-=-=-
 
     /**
-     * Must be run sync (calls Bukkit API)
+     * Must be run on the thread that owns the protection block (the main thread on Paper, the block's region thread
+     * on Folia), since it reads the block.
      * @return whether or not the protection block is hidden (/ps hide)
      */
     public boolean isHidden() {
-        return !this.getType().equals(BlockUtil.getProtectBlockType(this.getProtectBlock()));
+        boolean hidden = !this.getType().equals(BlockUtil.getProtectBlockType(this.getProtectBlock()));
+        recordHidden(hidden);
+        return hidden;
+    }
+
+    // -=-=-=- last known hidden state, for readers that do not own the protection block -=-=-=-
+
+    private record HiddenSnapshot(boolean hidden, long checkedAt) {
+    }
+
+    private record HiddenRefresh(CompletableFuture<Boolean> result, long startedAt) {
+    }
+
+    // keyed by world UUID + region id; written whenever the owning thread reads or changes the protection block
+    private static final Map<String, HiddenSnapshot> HIDDEN_SNAPSHOTS = new ConcurrentHashMap<>();
+    private static final Map<String, HiddenRefresh> HIDDEN_REFRESHES = new ConcurrentHashMap<>();
+    private static final long HIDDEN_SNAPSHOT_TTL_MS = 5000L;
+    private static final long HIDDEN_FIRST_READ_WAIT_MS = 100L;
+
+    private String hiddenKey() {
+        return getWorld().getUID() + ":" + getId();
+    }
+
+    private void recordHidden(boolean hidden) {
+        HIDDEN_SNAPSHOTS.put(hiddenKey(), new HiddenSnapshot(hidden, System.currentTimeMillis()));
+    }
+
+    /**
+     * Whether or not the protection block is hidden, safe to call from any thread (for example PlaceholderAPI
+     * placeholders, which may be resolved asynchronously or on another region's thread).
+     *
+     * <p>On the thread that owns the protection block this is the same as {@link #isHidden()}. Elsewhere it returns
+     * the last value read on the owning thread, refreshing it there when it is older than a few seconds. The first
+     * read from a non-tick thread waits briefly for that refresh; a read from another tick thread never waits, and
+     * returns false until the refresh has run.</p>
+     *
+     * @return whether or not the protection block is hidden, as last seen by the thread that owns it
+     */
+    public boolean isHiddenSnapshot() {
+        Location loc = getProtectBlock().getLocation();
+        if (PSScheduler.isOwnedByCurrentRegion(loc)) {
+            return isHidden();
+        }
+
+        String key = hiddenKey();
+        HiddenSnapshot snapshot = HIDDEN_SNAPSHOTS.get(key);
+        long now = System.currentTimeMillis();
+        if (snapshot != null && now - snapshot.checkedAt() < HIDDEN_SNAPSHOT_TTL_MS) {
+            return snapshot.hidden();
+        }
+
+        CompletableFuture<Boolean> refresh = refreshHiddenSnapshot(key, loc, now);
+        if (snapshot != null) {
+            return snapshot.hidden();
+        }
+        // first read of this region: a non-tick thread (async chat, scoreboard threads) can wait a moment for the
+        // owning thread; a tick thread must not block on another region
+        if (!Bukkit.isPrimaryThread()) {
+            try {
+                return refresh.get(HIDDEN_FIRST_READ_WAIT_MS, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (ExecutionException | TimeoutException ignored) {
+            }
+        }
+        return false;
+    }
+
+    private CompletableFuture<Boolean> refreshHiddenSnapshot(String key, Location loc, long now) {
+        // one refresh in flight per region; a refresh that never ran (its chunk failed to load) is retried after
+        // the TTL
+        HiddenRefresh[] created = new HiddenRefresh[1];
+        HiddenRefresh pending = HIDDEN_REFRESHES.compute(key, (k, existing) -> {
+            if (existing != null && !existing.result().isDone() && now - existing.startedAt() < HIDDEN_SNAPSHOT_TTL_MS) {
+                return existing;
+            }
+            return created[0] = new HiddenRefresh(new CompletableFuture<>(), now);
+        });
+        if (pending != created[0]) {
+            return pending.result();
+        }
+
+        CompletableFuture<Boolean> result = pending.result();
+        Runnable read = () -> {
+            try {
+                result.complete(isHidden());
+            } catch (Throwable t) {
+                result.completeExceptionally(t);
+            } finally {
+                HIDDEN_REFRESHES.remove(key, pending);
+            }
+        };
+        // load the chunk if needed (as a direct read used to), then read the block on the thread that owns it
+        loc.getWorld().getChunkAtAsync(loc).whenComplete((chunk, err) -> {
+            if (err != null) {
+                result.completeExceptionally(err);
+                HIDDEN_REFRESHES.remove(key, pending);
+            } else {
+                PSScheduler.runAt(loc, read);
+            }
+        });
+        return result;
+    }
+
+    /**
+     * Run a task on the thread that owns this region's protection block: immediately if the calling thread
+     * already owns it, otherwise scheduled on the owning region (the main thread on Paper).
+     * @param task the task that reads or writes the protection block
+     */
+    public void runAtProtectBlock(Runnable task) {
+        PSScheduler.runAt(getProtectBlock().getLocation(), task);
+    }
+
+    /**
+     * Set the protection block to air if it is not hidden, on the thread that owns the block.
+     * Used when deleting a region with deleteBlock = true.
+     */
+    protected void removeProtectBlock() {
+        runAtProtectBlock(() -> {
+            if (!isHidden()) {
+                getProtectBlock().setType(Material.AIR);
+            }
+        });
     }
 
     /**
      * Hides the protection block, if it is not hidden.
+     * If called from a thread that does not own the protection block, the change is scheduled on the owning
+     * thread and true is returned.
      * @return whether or not the block was hidden
      */
     public boolean hide() {
+        if (!PSScheduler.isOwnedByCurrentRegion(getProtectBlock().getLocation())) {
+            runAtProtectBlock(this::hide);
+            return true;
+        }
         if (!isHidden()) {
             getProtectBlock().setType(Material.AIR);
+            recordHidden(true);
             return true;
         } else {
             return false;
@@ -594,9 +735,15 @@ public abstract class PSRegion {
 
     /**
      * Unhides the protection block, if it is hidden.
+     * If called from a thread that does not own the protection block, the change is scheduled on the owning
+     * thread and true is returned.
      * @return whether or not the block was unhidden
      */
     public boolean unhide() {
+        if (!PSScheduler.isOwnedByCurrentRegion(getProtectBlock().getLocation())) {
+            runAtProtectBlock(this::unhide);
+            return true;
+        }
         if (isHidden()) {
             if (getType().startsWith("PLAYER_HEAD")) {
                 getProtectBlock().setType(Material.PLAYER_HEAD);
@@ -606,6 +753,7 @@ public abstract class PSRegion {
             } else {
                 getProtectBlock().setType(Material.getMaterial(getType()));
             }
+            recordHidden(false);
             return true;
         } else {
             return false;
@@ -643,13 +791,19 @@ public abstract class PSRegion {
      * @param type the type of protection region to switch to
      */
     public void setType(PSProtectBlock type) {
-        if (!isHidden()) {
-            Material set = Material.matchMaterial(type.type) == null ? Material.PLAYER_HEAD : Material.matchMaterial(type.type);
-            getProtectBlock().setType(set);
-            if (type.type.startsWith("PLAYER_HEAD") && type.type.split(":").length > 1) {
-                BlockUtil.setHeadType(type.type, getProtectBlock());
+        // capture the current type now: subclasses update the stored type right after this call, and the block
+        // change below may run later on the thread that owns the block
+        String previousType = getType();
+        runAtProtectBlock(() -> {
+            Block block = getProtectBlock();
+            if (previousType != null && previousType.equals(BlockUtil.getProtectBlockType(block))) { // not hidden
+                Material set = Material.matchMaterial(type.type) == null ? Material.PLAYER_HEAD : Material.matchMaterial(type.type);
+                block.setType(set);
+                if (type.type.startsWith("PLAYER_HEAD") && type.type.split(":").length > 1) {
+                    BlockUtil.setHeadType(type.type, block);
+                }
             }
-        }
+        });
     }
 
     /**

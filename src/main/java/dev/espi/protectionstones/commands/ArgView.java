@@ -15,6 +15,7 @@
 
 package dev.espi.protectionstones.commands;
 
+import dev.espi.protectionstones.utils.PSScheduler;
 import com.sk89q.worldguard.bukkit.WorldGuardPlugin;
 import dev.espi.protectionstones.*;
 import dev.espi.protectionstones.utils.ParticlesUtil;
@@ -25,11 +26,12 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class ArgView implements PSCommandArg {
 
-    private static List<UUID> cooldown = new ArrayList<>();
+    private static Set<UUID> cooldown = ConcurrentHashMap.newKeySet(); // touched from player threads and the async timer
 
     @Override
     public List<String> getNames() {
@@ -78,13 +80,13 @@ public class ArgView implements PSCommandArg {
 
         // add player to cooldown
         cooldown.add(p.getUniqueId());
-        Bukkit.getScheduler().runTaskLaterAsynchronously(ProtectionStones.getInstance(), () -> cooldown.remove(p.getUniqueId()), 20 * ProtectionStones.getInstance().getConfigOptions().psViewCooldown);
+        PSScheduler.runAsyncLater(() -> cooldown.remove(p.getUniqueId()), 20L * ProtectionStones.getInstance().getConfigOptions().psViewCooldown);
 
         int playerY = p.getLocation().getBlockY(), minY = r.getWGRegion().getMinimumPoint().getBlockY(), maxY = r.getWGRegion().getMaximumPoint().getBlockY();
 
         // send particles to client
 
-        Bukkit.getScheduler().runTaskAsynchronously(ProtectionStones.getInstance(), () -> {
+        PSScheduler.runAsync(() -> {
 
             AtomicInteger modU = new AtomicInteger(0);
 

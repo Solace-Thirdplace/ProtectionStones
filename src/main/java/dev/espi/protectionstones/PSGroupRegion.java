@@ -113,8 +113,9 @@ public class PSGroupRegion extends PSStandardRegion {
         List<PSMergedRegion> l = getMergedRegions();
         if (super.deleteRegion(deleteBlock, cause)) {
             for (PSMergedRegion r : l) {
-                if (deleteBlock && !r.isHidden()) {
-                    r.getProtectBlock().setType(Material.AIR);
+                // merged blocks can be far apart (different region threads on Folia)
+                if (deleteBlock) {
+                    r.removeProtectBlock();
                 }
             }
             return true;

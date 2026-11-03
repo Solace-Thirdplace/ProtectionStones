@@ -15,6 +15,7 @@
 
 package dev.espi.protectionstones.commands;
 
+import dev.espi.protectionstones.utils.PSScheduler;
 import com.sk89q.worldguard.bukkit.WorldGuardPlugin;
 import dev.espi.protectionstones.*;
 import dev.espi.protectionstones.utils.LimitUtil;
@@ -78,7 +79,7 @@ public class ArgAddRemove implements PSCommandArg {
         String addPlayerName = UUIDCache.getNameFromUUID(addPlayerUuid);
 
         // getting player regions is slow, so run it async
-        Bukkit.getServer().getScheduler().runTaskAsynchronously(ProtectionStones.getInstance(), () -> {
+        PSScheduler.runAsync(() -> {
             List<PSRegion> regions;
 
             // obtain region list that player is being added to or removed from
@@ -129,7 +130,7 @@ public class ArgAddRemove implements PSCommandArg {
                     }
 
                     // add to WorldGuard profile cache
-                    Bukkit.getScheduler().runTaskAsynchronously(ProtectionStones.getInstance(), () -> UUIDCache.storeWGProfile(addPlayerUuid, addPlayerName));
+                    PSScheduler.runAsync(() -> UUIDCache.storeWGProfile(addPlayerUuid, addPlayerName));
 
                 } else if ((operationType.equals("remove") && r.isMember(addPlayerUuid))
                         || (operationType.equals("removeowner") && r.isOwner(addPlayerUuid))) {
